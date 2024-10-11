@@ -20,6 +20,20 @@ data Token = TInt Integer
            | TRParen
            deriving (Eq, Show)
 
+data Prim = Add | Sub | Mul | Div | Mod
+          | Eq | Ne | Lt | Gt | Le | Ge
+          | And | Or | Not
+          | Cons | Car | Cdr
+          | If | Let | Lambda
+          deriving (Eq, Show)
+
+data Value = VInt Integer
+           | VSym String
+           | VPrim Prim
+           | VList [Value]
+           | VClosure [String] Expr Env
+           deriving (Eq, Show)
+
 isValidSymbol :: Char -> Bool
 isValidSymbol '(' = False
 isValidSymbol ')' = False
