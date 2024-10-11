@@ -7,7 +7,10 @@ module Lib
       Value(..),
       lexTokens,
       parse,
-      eval
+      eval,
+      test,
+      runTests,
+      evalStep
     ) where
 
 import Data.String
@@ -19,6 +22,7 @@ someFunc = putStrLn "someFunc"
 data Expr = LInt Integer
           | LSym String
           | SExpr [Expr]
+          | EV Value
           deriving (Eq, Show)
 type Program = [Expr]
 
@@ -113,6 +117,27 @@ evalPrim If [VInt 0, _, z] = z
 evalPrim If [_, y, _] = y
 -- evalPrim Lambda [VList xs, y, _] = VClosure [x | VSym x <- xs] y [] -- broken
 
+prim :: String -> Prim
+prim "not" = Not
+prim "car" = Car
+prim "cdr" = Cdr
+prim "+" = Add
+prim "-" = Sub
+prim "*" = Mul
+prim "/" = Div
+prim "%" = Mod
+prim "==" = Eq
+prim "!=" = Ne
+prim "<" = Lt
+prim ">" = Gt
+prim "<=" = Le
+prim ">=" = Ge
+prim "&&" = And
+prim "||" = Or
+prim "cons" = Cons
+prim "if" = If
+prim "lambda" = Lambda
+
 -- Evaluate expressions
 
 eval :: Expr -> Env -> Value
@@ -124,31 +149,8 @@ eval (SExpr [LSym "let", SExpr [LSym x, e], body]) env = eval body ((x, eval e e
 eval (LSym s) env = case lookup s env of
   Just v -> v
   Nothing -> VSym s
--- Unary primitives
-eval (SExpr [LSym s, x]) env = evalPrim (prim s) [eval x env]
-  where prim "not" = Not
-        prim "car" = Car
-        prim "cdr" = Cdr
-        prim "cons" = Cons
--- Binary primitives
-eval (SExpr [LSym s, x, y]) env = evalPrim (prim s) [eval x env, eval y env]
-  where prim "+" = Add
-        prim "-" = Sub
-        prim "*" = Mul
-        prim "/" = Div
-        prim "%" = Mod
-        prim "==" = Eq
-        prim "!=" = Ne
-        prim "<" = Lt
-        prim ">" = Gt
-        prim "<=" = Le
-        prim ">=" = Ge
-        prim "&&" = And
-        prim "||" = Or
-        prim "cons" = Cons
--- Ternary primitives
-eval (SExpr [LSym s, x, y, z]) env = evalPrim (prim s) [eval x env, eval y env, eval z env]
-  where prim "if" = If
+-- Primitive functions
+eval (SExpr (LSym s : xs)) env = evalPrim (prim s) (map (`eval` env) xs)
 
 -- Test #######################################################################
 
@@ -166,3 +168,36 @@ runTests = print (test "(+ 1 2)") >>
            print (test "(car (cons 1 (cons 2 (cons 3 (cons 4 (cons 5 ))))))") >>
            print (test "(cdr (cons 1 (cons 2 (cons 3 (cons 4 (cons 5))))))") >>
            print (test "(let (x (cons 1 (cons 2 (cons 3 (cons 4 (cons 5)))))) (car x))")
+
+-- Step by step ###############################################################
+
+type StepEnv = [(String, Expr)]
+type Step = (Expr, StepEnv)
+
+evalStep :: Step -> Step
+-- Done, no-op
+evalStep (EV v, env) = (EV v, env)
+-- Literals
+evalStep (LInt n, env) = (EV (VInt n), env)
+-- Let bindings
+evalStep (SExpr [LSym "let", SExpr [LSym x, e], body], env) | isValue e = (body, (x, e):env)
+  where isValue (EV _) = True
+        isValue _ = False
+evalStep (SExpr [LSym "let", SExpr [LSym x, e], body], env) = (body, (x, fst $ evalStep (e, env)):env)
+-- Variables
+evalStep (LSym s, env) = case lookup s env of
+  Just v -> (v, env)
+  Nothing -> (EV $ VSym s, env)
+-- Primitive functions
+evalStep (SExpr (LSym s : xs), env) | all isValue xs = (EV (evalPrim (prim s) (map (\(EV v) -> v) xs)), env)
+  where isValue (EV _) = True
+        isValue _ = False
+evalStep (SExpr (LSym s : xs), env) = (SExpr (LSym s : xyz), env)
+  where xyz = map es xs
+        es (EV v) = EV v
+        es e = fst $ evalStep (e, env)
+
+-- Test #######################################################################
+
+testStep :: String -> Step
+testStep s = (parse (lexTokens s), [])
