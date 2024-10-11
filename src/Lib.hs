@@ -1,5 +1,13 @@
 module Lib
-    ( someFunc
+    ( someFunc,
+      Expr(..),
+      Program,
+      Token(..),
+      Prim(..),
+      Value(..),
+      lexTokens,
+      parse,
+      eval
     ) where
 
 import Data.String
@@ -33,6 +41,8 @@ data Value = VInt Integer
            | VList [Value]
            | VClosure [String] Expr Env
            deriving (Eq, Show)
+
+-- Construct AST ##############################################################
 
 isValidSymbol :: Char -> Bool
 isValidSymbol '(' = False
@@ -70,3 +80,37 @@ parseExpr (TSym s:xs) = (LSym s, xs)
 parseExpr (TLParen:xs) = (SExpr exprs, rest)
   where (exprs, rest) = parseExprs xs
 parseExpr _ = error "parseExpr: invalid input"
+
+-- Evaluate ###################################################################
+
+type Env = [(String, Value)]
+
+-- Primitive functions
+
+evalPrim :: Prim -> [Value] -> Value
+evalPrim Add [VInt x, VInt y] = VInt (x + y)
+evalPrim Sub [VInt x, VInt y] = VInt (x - y)
+evalPrim Mul [VInt x, VInt y] = VInt (x * y)
+evalPrim Div [VInt x, VInt y] = VInt (x `div` y)
+evalPrim Mod [VInt x, VInt y] = VInt (x `mod` y)
+evalPrim Eq [VInt x, VInt y] = VInt (if x == y then 1 else 0)
+evalPrim Ne [VInt x, VInt y] = VInt (if x /= y then 1 else 0)
+evalPrim Lt [VInt x, VInt y] = VInt (if x < y then 1 else 0)
+evalPrim Gt [VInt x, VInt y] = VInt (if x > y then 1 else 0)
+evalPrim Le [VInt x, VInt y] = VInt (if x <= y then 1 else 0)
+evalPrim Ge [VInt x, VInt y] = VInt (if x >= y then 1 else 0)
+evalPrim And [VInt x, VInt y] = VInt (if x /= 0 && y /= 0 then 1 else 0)
+evalPrim Or [VInt x, VInt y] = VInt (if x /= 0 || y /= 0 then 1 else 0)
+evalPrim Not [VInt x] = VInt (if x == 0 then 1 else 0)
+evalPrim Cons [x, VList xs] = VList (x:xs)
+evalPrim Car [VList (x:_)] = x
+evalPrim Cdr [VList (_:xs)] = VList xs
+evalPrim If [VInt 0, _, z] = z
+evalPrim If [_, y, _] = y
+evalPrim Let [VSym x, y, z] = z
+evalPrim Lambda [VList xs, y, _] = VClosure (map (\(VSym x) -> x) xs) y []
+
+-- Evaluate expressions
+
+eval :: Expr -> Env -> Value
+eval = undefined
