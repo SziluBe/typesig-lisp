@@ -32,7 +32,7 @@ lexTokens (')':xs) = TRParen : lexTokens xs
 lexTokens (x:xs) | isSpace x = lexTokens xs
 lexTokens (x:xs) | isDigit x = TInt (read num) : lexTokens rest
   where (num, rest) = span isDigit (x:xs)
-lexTokens (x:xs) | isAlpha x = TSym sym : lexTokens rest
+lexTokens (x:xs) | isValidSymbol x = TSym sym : lexTokens rest
   where (sym, rest) = span isValidSymbol (x:xs)
 lexTokens _ = error "lexTokens: invalid input"
 
