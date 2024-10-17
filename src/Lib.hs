@@ -96,6 +96,7 @@ evalPrim :: Prim -> [Value] -> Value
 evalPrim Not [VInt x] = VInt (if x == 0 then 1 else 0)
 evalPrim Car [VList (x:_)] = x
 evalPrim Cdr [VList (_:xs)] = VList xs
+evalPrim Cons [x] = VList [x] -- unary cons, for creating lists
 -- Binary
 evalPrim Add [VInt x, VInt y] = VInt (x + y)
 evalPrim Sub [VInt x, VInt y] = VInt (x - y)
@@ -110,7 +111,6 @@ evalPrim Le [VInt x, VInt y] = VInt (if x <= y then 1 else 0)
 evalPrim Ge [VInt x, VInt y] = VInt (if x >= y then 1 else 0)
 evalPrim And [VInt x, VInt y] = VInt (if x /= 0 && y /= 0 then 1 else 0)
 evalPrim Or [VInt x, VInt y] = VInt (if x /= 0 || y /= 0 then 1 else 0)
-evalPrim Cons [x] = VList [x] -- unary cons, for creating lists
 evalPrim Cons [x, VList xs] = VList (x:xs)
 -- Ternary
 evalPrim If [VInt 0, _, z] = z
