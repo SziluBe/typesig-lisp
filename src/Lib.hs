@@ -23,6 +23,7 @@ data Expr = LInt Integer
           | LSym String
           | SExpr [Expr]
           | EV Value
+          | EClosure [String] Expr
           deriving (Eq, Show)
 type Program = [Expr]
 
@@ -43,7 +44,7 @@ data Value = VInt Integer
            | VSym String
            | VPrim Prim
            | VList [Value]
-           | VClosure [String] Expr Env -- not yet implemented
+           | VClosure [String] Expr Env
            deriving (Eq, Show)
 
 -- Construct AST ##############################################################
@@ -115,7 +116,6 @@ evalPrim Cons [x, VList xs] = VList (x:xs)
 -- Ternary
 evalPrim If [VInt 0, _, z] = z
 evalPrim If [_, y, _] = y
--- evalPrim Lambda [VList xs, y, _] = VClosure [x | VSym x <- xs] y [] -- broken
 
 prim :: String -> Prim
 prim "not" = Not
@@ -136,7 +136,6 @@ prim "&&" = And
 prim "||" = Or
 prim "cons" = Cons
 prim "if" = If
-prim "lambda" = Lambda
 
 -- Evaluate expressions
 
@@ -149,8 +148,14 @@ eval (SExpr [LSym "let", SExpr [LSym x, e], body]) env = eval body ((x, eval e e
 eval (LSym s) env = case lookup s env of
   Just v -> v
   Nothing -> VSym s
+-- Lambdas
+eval (SExpr [LSym "lambda", SExpr xs, body]) env = VClosure [x | LSym x <- xs] body env
 -- Primitive functions
 eval (SExpr (LSym s : xs)) env = evalPrim (prim s) (map (`eval` env) xs)
+-- Lambda application
+eval (SExpr (f : xs)) env = case eval f env of
+  VClosure ys body env' -> eval body (zip ys (map (`eval` env) xs) ++ env')
+  _ -> error "eval: not a function"
 
 -- Test #######################################################################
 
@@ -188,11 +193,20 @@ evalStep (SExpr [LSym "let", SExpr [LSym x, e], body], env) = (body, (x, fst $ e
 evalStep (LSym s, env) = case lookup s env of
   Just v -> (v, env)
   Nothing -> (EV $ VSym s, env)
+-- Lambdas
+evalStep (SExpr [LSym "lambda", SExpr xs, body], env) = (EClosure [x | LSym x <- xs] body, env) 
 -- Primitive functions
 evalStep (SExpr (LSym s : xs), env) | all isValue xs = (EV (evalPrim (prim s) (map (\(EV v) -> v) xs)), env)
   where isValue (EV _) = True
         isValue _ = False
 evalStep (SExpr (LSym s : xs), env) = (SExpr (LSym s : xyz), env)
+  where xyz = map es xs
+        es (EV v) = EV v
+        es e = fst $ evalStep (e, env)
+-- Lambda application
+evalStep (SExpr (f : xs), env) = case fst $ evalStep (f, env) of
+  EClosure ys body -> (body, zip ys xs ++ env)
+  v -> (SExpr (v : xyz), env)
   where xyz = map es xs
         es (EV v) = EV v
         es e = fst $ evalStep (e, env)
