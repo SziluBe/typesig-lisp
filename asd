@@ -37,7 +37,7 @@ data Prim = Add | Sub | Mul | Div | Mod
           | Eq | Ne | Lt | Gt | Le | Ge
           | And | Or | Not
           | Cons | Car | Cdr
-          | If | Let | Lambda
+          | If | Let | Lambda | NONE
           deriving (Eq, Show)
 
 data Value = VInt Integer
@@ -136,16 +136,11 @@ prim "&&" = And
 prim "||" = Or
 prim "cons" = Cons
 prim "if" = If
-
-isValue :: Expr -> Bool
-isValue (EV _) = True
-isValue _ = False
+prim _ = NONE
 
 -- Evaluate expressions
 
 eval :: Expr -> Env -> Value
--- Unwrap
-eval (SExpr [e]) env = eval e env
 -- Literals
 eval (LInt n) _ = VInt n
 -- Let bindings
@@ -154,26 +149,18 @@ eval (SExpr [LSym "let", SExpr [LSym x, e], body]) env = eval body ((x, eval e e
 eval (LSym s) env = case lookup s env of
   Just v -> v
   Nothing -> VSym s
--- -- Lambdas (with partial application)
--- eval (SExpr (LSym "lambda" : SExpr names : body : args)) env | length args < length names = VClosure names'' body env'
---                                                              | otherwise = eval (SExpr (body : restArgs)) (env' ++ env)
---   where env' = zip names' (map (`eval` env) immediateArgs)
---         (names', names'') = splitAt (length args) $ map (\(LSym s) -> s) names
---         (immediateArgs, restArgs) = splitAt (length names) args
 -- Lambdas
-eval (SExpr [LSym "lambda", SExpr names, body]) env = VClosure (map (\(LSym s) -> s) names) body env
--- Function application
-eval (SExpr (LSym s : args)) env = case lookup s env of
-  -- Closures
-  Just (VClosure names body env') | length args < length names -> VClosure names'' body env'
-                                  | otherwise -> eval (SExpr (body : restArgs)) (env' ++ env)
-    where env' = zip names' (map (`eval` env) immediateArgs)
-          (names', names'') = splitAt (length args) names
-          (immediateArgs, restArgs) = splitAt (length names) args
-  -- Primitives
-  Nothing -> evalPrim (prim s) (map (`eval` env) args)
-eval (SExpr ((SExpr [e]) : args)) env = eval (SExpr (e : args)) env
-eval x env = error $ "eval: invalid input: '" ++ show x ++ "', env: " ++ show env
+eval (SExpr [LSym "lambda", SExpr xs, body]) env = VClosure [x | LSym x <- xs] body env
+-- Primitive functions
+eval (SExpr (LSym s : xs)) env | prim s /= NONE = evalPrim (prim s) (map (`eval` env) xs)
+-- User defined functions
+eval (SExpr (LSym f : xs)) env = case eval (LSym f) env of
+  VClosure ys body env' -> eval body (zip ys (map (`eval` env) xs) ++ env')
+  _ -> error ("eval: " ++ f ++ " not found in env: " ++ show env ++ " for " ++ show (SExpr (LSym f : xs)))
+-- Direct lambda application
+eval (SExpr (f : xs)) env = case eval f env of
+  VClosure ys body env' -> eval body (zip ys (map (`eval` env) xs) ++ env')
+  _ -> error "eval: not a closure"
 
 -- Test #######################################################################
 
@@ -204,33 +191,30 @@ evalStep (EV v, env) = (EV v, env)
 evalStep (LInt n, env) = (EV (VInt n), env)
 -- Let bindings
 evalStep (SExpr [LSym "let", SExpr [LSym x, e], body], env) | isValue e = (body, (x, e):env)
+  where isValue (EV _) = True
+        isValue _ = False
 evalStep (SExpr [LSym "let", SExpr [LSym x, e], body], env) = (body, (x, fst $ evalStep (e, env)):env)
 -- Variables
 evalStep (LSym s, env) = case lookup s env of
   Just v -> (v, env)
   Nothing -> (EV $ VSym s, env)
 -- Lambdas
-evalStep (SExpr (LSym "lambda" : SExpr names : body : args), env) | all isValue immediateArgs = (SExpr $ body : restArgs, zip names' immediateArgs ++ env)
-  where (immediateArgs, restArgs) = splitAt (length names) args
-        names' = map (\(LSym s) -> s) names
-evalStep (SExpr (LSym "lambda" : SExpr names : body : args), env) = (SExpr (LSym "lambda" : SExpr names : body : xyz), env)
-  where xyz = map es immediateArgs ++ restArgs
-        (immediateArgs, restArgs) = splitAt (length names) args
-        es (EV v) = EV v
-        es e = fst $ evalStep (e, env)
+evalStep (SExpr [LSym "lambda", SExpr xs, body], env) = (EClosure [x | LSym x <- xs] body, env) 
 -- Primitive functions
 evalStep (SExpr (LSym s : xs), env) | all isValue xs = (EV (evalPrim (prim s) (map (\(EV v) -> v) xs)), env)
+  where isValue (EV _) = True
+        isValue _ = False
 evalStep (SExpr (LSym s : xs), env) = (SExpr (LSym s : xyz), env)
   where xyz = map es xs
         es (EV v) = EV v
         es e = fst $ evalStep (e, env)
--- -- Lambda application
--- evalStep (SExpr (f : xs), env) = case fst $ evalStep (f, env) of
---   EClosure ys body -> (body, zip ys xs ++ env)
---   v -> (SExpr (v : xyz), env)
---   where xyz = map es xs
---         es (EV v) = EV v
---         es e = fst $ evalStep (e, env)
+-- Lambda application
+evalStep (SExpr (f : xs), env) = case fst $ evalStep (f, env) of
+  EClosure ys body -> (body, zip ys xs ++ env)
+  v -> (SExpr (v : xyz), env)
+  where xyz = map es xs
+        es (EV v) = EV v
+        es e = fst $ evalStep (e, env)
 
 -- Test #######################################################################
 
