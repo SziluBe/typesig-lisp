@@ -207,7 +207,6 @@ evalStep (SExpr (EV (VPrim p) : args), env) | length args == arity p && all isVa
         unwrap _ = error "evalStep: invalid argument"
         arity p | p `elem` [Not, Car, Cdr, LList] = 1
                 | p `elem` [Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Gt, Le, Ge, And, Or, Cons] = 2
-                | p == If = 3
                 | otherwise = error "evalStep: invalid primitive"
 -- Special case: If
 evalStep (SExpr (EV (VPrim If) : args), env) | [x, y, z] <- args = if isDone (x, env)
