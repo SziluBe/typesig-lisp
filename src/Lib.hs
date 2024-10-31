@@ -202,7 +202,7 @@ evalStep (SExpr (SExpr (EV (VPrim p) : terms) : args), env) = (SExpr (EV (VPrim 
         feed [] _ = error "evalStep: too many arguments"
 ---- Apply
 -- Evaluate primitive functions
-evalStep (SExpr (EV (VPrim p) : args), env) | length args == arity p && all isValue args = (EV $ evalPrim p $ map unwrap args, env)
+evalStep (SExpr (EV (VPrim p) : args), env) | length args == arity p && all isValue args && p /= If = (EV $ evalPrim p $ map unwrap args, env)
   where unwrap (EV v) = v
         unwrap _ = error "evalStep: invalid argument"
         arity p | p `elem` [Not, Car, Cdr, LList] = 1
