@@ -90,7 +90,8 @@ pretty (LInt n) = show n
 pretty (LSym s) = s
 pretty (SExpr xs) = "(" ++ unwords (map pretty xs) ++ ")"
 pretty (EV v) = show v
-pretty (EClosure names body env) = "(lambda (" ++ unwords names ++ ") " ++ pretty body ++ "<" ++ show env ++ ">)"
+pretty (EClosure names body env) = "(lambda (" ++ unwords names ++ ") " ++ pretty body ++ "<<[" ++ env' ++ "]>>)"
+  where env' = unwords $ map (\(x, e) -> x ++ ": (" ++ pretty e ++ "),") env
 
 prettyp :: (Expr, StepEnv) -> (String, [(String, String)])
 prettyp = Data.Bifunctor.bimap pretty (map (Data.Bifunctor.second pretty)) -- prettyp x = (pretty $ fst x, map (\y -> (fst y, pretty $ snd y)) $ snd x)
@@ -159,17 +160,6 @@ type Step = (Expr, StepEnv)
 
 isDone :: Step -> Bool
 isDone s = evalStep s == s
--- isDone (EV _, _) = True
--- isDone (EClosure _ _ _, _) = True
--- isDone _ = False
-
-lookup'                  :: String -> [(String,Expr)] -> Maybe Expr
-lookup' _key []          =  Nothing
-lookup'  key ((x,y):xys)
-    | key == x = case y of
-                    LSym s -> lookup' s xys
-                    _ -> Just y
-    | otherwise          =  lookup key xys
 
 -- Proper lambda calculus this time
 -- Valid terms:
@@ -178,65 +168,86 @@ lookup'  key ((x,y):xys)
 -- 3. e e
 -- Function application is left associative
 evalStep :: Step -> Step
--- 1. x
-evalStep (EV v, env) = (EV v, env)
--- Literals
-evalStep (LInt n, env) = (EV (VInt n), env)
--- Variables
-evalStep (LSym s, env) = case lookup' s env of -- Implicit shadowing of variable names (last binding is used) through list order (always prepend to env) and lookup
-  Just v -> (v, env)
-  -- Primitive functions
-  Nothing | p /= NONE -> (EV $ VPrim p, env)
-    where p = prim s
-  Nothing -> (LSym s, env)
--- Let bindings
-evalStep (SExpr [LSym "let", SExpr [LSym x, e], body], env) = (body, (x, e):env)
--- 2. \x.e
+--- 
 -- Lambda
 evalStep (SExpr [LSym "lambda", SExpr names, body], env) = (EClosure names' body [], env)
   where names' = map unwrap names
         unwrap (LSym s) = s
         -- unwrap (EV (VSym s)) = s
         unwrap x = error $ "evalStep: invalid name: " ++ show x ++ ", in: " ++ show names
--- 3. e e
--- Unwrap SExpr
+-- Let bindings
+evalStep (SExpr [LSym "let", SExpr [LSym x, e], body], env) = (body, (x, e):env)
+---- Simplify
+-- Single term: unwrap
 evalStep (SExpr [e], env) = (e, env)
--- Substitute into each term
--- evalStep (SExpr xs, env) | not $ all (isDone . (, env)) xs = (SExpr $ (x' : map (fst . evalStep . (, env)) xs), env')
---   where (x', env') = evalStep (x, env)
-evalStep (SExpr xs, env) | not $ all (isSubbed . (, env)) xs = (SExpr $ map (subst . (, env)) xs, env)
-  where subst (x, env) = case x of
-          SExpr [LSym "lambda", SExpr names, body] -> EClosure (map (\(LSym s) -> s) names) body []
-          LSym s -> case lookup' s env of
-            Just v -> v
-            Nothing -> x
-          EClosure names body env' -> EClosure names (subst (body, env' ++ env)) env'
-          SExpr xs -> SExpr (map (subst . (, env)) xs)
-          _ -> x
-        isSubbed (x, env) = (subst (x, env)) == x
--- Function application
-evalStep (SExpr (f : args), env) | not (isDone (f, env)) = (SExpr $ f' : args, env')
-  where (f', env') = evalStep (f, env)
-evalStep (SExpr (f : args), env) = case f of
-  EClosure names body env' | length args < length names -> (EClosure (drop (length args) names) body (zip names args ++ env'), env)
-                           | length args >= length names -> (SExpr (body : drop (length names) args), zip names args ++ env' ++ env)
-  EV (VPrim If) | [x, y, z] <- args -> if isDone (x, env)
-                    then (if x == EV (VInt 0) then (z, env) else (y, env))
-                    else (SExpr [EV (VPrim If), fst (evalStep (x, env)), y, z], env)
-  EV (VPrim p) | all isValue args -> (EV (evalPrim p (map unwrap args)), env)
-               | otherwise -> (SExpr (EV (VPrim p) : map (fst . evalStep . (, env)) args), env)
-               where unwrap (EV v) = v
-                     unwrap x = error $ "evalStep: invalid argument: " ++ show x
-  _ -> error $ "evalStep: invalid function: " ++ show f ++ ", in: " ++ show (f : args)
+-- Multiple terms: Simplify first term
+evalStep (SExpr (e:es), env) | not $ isDone (e, env) = (SExpr (fst (evalStep (e, env)) : es), env)
+-- Multiple terms: recurse --> this is bad bad, do not do this or you will get ...FYFYFYFYFYFYFYF2 from YF2 (factorial 2 using Y combinator)
+-- This is because we get YF2 -> F(YF)2, then we evaluate each term, including YF, which becomes FYF, etc. ad infinitum
+-- evalStep (SExpr es, env) | not $ all (isDone . (, env)) es = (SExpr $ map (fst . evalStep . (, env)) es, env)
+---- Feed
+-- Feed arguments to closure
+-- Notes:
+-- Function application is left associative (in simple lambda calculus w/ only one argument allowed, the first two terms combine into a single term)
+-- (\x. e) a b c = e[a/x] b c
+-- So we don't need to split on pattern match here
+evalStep (SExpr (EClosure names body env' : args), env) = (EClosure (drop (length args) names) (SExpr (body : drop (length names) args)) (zip names args ++ env'), env)
+-- Feed arguments to primitive functions' arguments
+evalStep (SExpr (SExpr (EV (VPrim p) : terms) : args), env) = (SExpr (EV (VPrim p) : terms'), env)
+  where terms' = feed terms args
+        feed _ [] = []
+        feed (EClosure names body env' : ts) args = SExpr (EClosure names body env' : take (length names) args) : feed ts (drop (length names) args)
+        feed (t:ts) args = t : feed ts args
+        -- we should never have remaining arguments with no terms left
+        feed [] _ = error "evalStep: too many arguments"
+---- Apply
+-- Evaluate primitive functions
+evalStep (SExpr (EV (VPrim p) : args), env) | length args == arity p && all isValue args = (EV $ evalPrim p $ map unwrap args, env)
+  where unwrap (EV v) = v
+        unwrap _ = error "evalStep: invalid argument"
+        arity p | p `elem` [Not, Car, Cdr, LList] = 1
+                | p `elem` [Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Gt, Le, Ge, And, Or, Cons] = 2
+                | p == If = 3
+                | otherwise = error "evalStep: invalid primitive"
+-- Special case: If
+evalStep (SExpr (EV (VPrim If) : args), env) | [x, y, z] <- args = if isDone (x, env)
+  then (if x == EV (VInt 0) then (z, env) else (y, env))
+  else (SExpr [EV (VPrim If), fst (evalStep (x, env)), y, z], env)
+-- Simplify arguments
+evalStep (SExpr (EV (VPrim p) : args), env) = (SExpr (EV (VPrim p) : map (fst . evalStep . (, env)) args), env)
+-- Substitute once no more arguments are missing
+evalStep (EClosure [] body env', env) = (subst body env', env)
+  where subst (LSym s) env = case lookup s env of
+          Just v -> v
+          Nothing -> case prim s of
+            NONE -> LSym s
+            p -> primToClosure p
+        subst (SExpr [LSym "let", SExpr [LSym x, e], body]) env = SExpr [LSym "let", SExpr [LSym x, e], subst body $ filter (\(x', _) -> x /= x') env]
+        subst (SExpr [LSym "lambda", SExpr names, body]) env | null env = EClosure names' body []
+                                                             | otherwise = subst (EClosure names' body []) $ filter (\(x, _) -> x `notElem` names') env
+                                                          where names' = map unwrap names
+                                                                unwrap (LSym s) = s
+        subst (EClosure names body env'') env = EClosure names body (env'' ++ env)
+        subst (SExpr xs) env = SExpr (map (`subst` env) xs)
+        subst x _ = x
+--- Evaluate
+-- Variables
+evalStep (LSym s, env) = case lookup s env of -- Implicit shadowing of variable names (last binding is used) through list order (always prepend to env) and lookup
+  Just v -> (v, env)
+  Nothing -> case prim s of
+    NONE -> (LSym s, env)
+    p -> (primToClosure p, env)
+-- Literals
+evalStep (LInt n, env) = (EV (VInt n), env)
+-- Values
+evalStep (EV v, env) = (EV v, env)
 evalStep s = s
 
-
-
-primExprToClosure :: Prim -> Expr
-primExprToClosure p | unary p = EClosure ["x"] (SExpr [EV (VPrim p), LSym "x"]) []
-                    | binary p = EClosure ["x", "y"] (SExpr [EV (VPrim p), LSym "x", LSym "y"]) []
-                    | ternary p = EClosure ["x", "y", "z"] (SExpr [EV (VPrim p), LSym "x", LSym "y", LSym "z"]) []
-                    | otherwise = error "primToClosure: invalid primitive"
+primToClosure :: Prim -> Expr
+primToClosure p | unary p = EClosure ["x"] (SExpr [EV (VPrim p), LSym "x"]) []
+                | binary p = EClosure ["x", "y"] (SExpr [EV (VPrim p), LSym "x", LSym "y"]) []
+                | ternary p = EClosure ["x", "y", "z"] (SExpr [EV (VPrim p), LSym "x", LSym "y", LSym "z"]) []
+                | otherwise = error "primToClosure: invalid primitive"
   where unary p = p `elem` [Not, Car, Cdr, LList]
         binary p = p `elem` [Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Gt, Le, Ge, And, Or, Cons]
         ternary p = p == If
